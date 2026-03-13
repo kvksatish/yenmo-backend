@@ -1,0 +1,78 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Gitea registry
+        run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login gitea.certainity.ai -u satish --password-stdin
+
+      - name: Build Docker image
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          docker build \
+            -t gitea.certainity.ai/yenmo/backend:latest \
+            -t gitea.certainity.ai/yenmo/backend:$TAG \
+            -t gitea.certainity.ai/yenmo/backend:${{ github.sha }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          docker push gitea.certainity.ai/yenmo/backend:latest
+          docker push gitea.certainity.ai/yenmo/backend:$TAG
+          docker push gitea.certainity.ai/yenmo/backend:${{ github.sha }}
+
+      - name: Deploy
+        run: |
+          docker stop yenmo-backend 2>/dev/null || true
+          docker rm yenmo-backend 2>/dev/null || true
+          docker pull gitea.certainity.ai/yenmo/backend:latest
+          docker run -d \
+            --name yenmo-backend \
+            --restart unless-stopped \
+            --network edge \
+            -e PORT=3001 \
+            -e NODE_ENV=production \
+            -e CORS_ORIGIN=${{ secrets.CORS_ORIGIN }} \
+            -e LOG_FILE_PATH=/data/sample.log \
+            -v /opt/yenmo/logs:/data \
+            -l "traefik.enable=true" \
+            -l "traefik.http.routers.yenmo-api.rule=Host(\`api.yenmo.in\`)" \
+            -l "traefik.http.routers.yenmo-api.entrypoints=websecure" \
+            -l "traefik.http.routers.yenmo-api.tls.certresolver=letsencrypt" \
+            -l "traefik.http.services.yenmo-api.loadbalancer.server.port=3001" \
+            -l "traefik.docker.network=edge" \
+            gitea.certainity.ai/yenmo/backend:latest
