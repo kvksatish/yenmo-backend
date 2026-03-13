@@ -302,22 +302,88 @@ docker run -d \
 
 The `-v` mount is required so the container can access the log file from the host.
 
-## Deployment
+## CI/CD
 
-The project uses Gitea Actions for CI/CD, defined in `.gitea/workflows/ci.yaml`.
+The project uses **Gitea Actions** for continuous integration and deployment, defined in `.gitea/workflows/ci.yaml`.
 
-**On every push to `main` and on pull requests**:
-1. Install dependencies
-2. Run TypeScript type checking (`tsc --noEmit`)
-3. Run the full test suite
+### Pipeline Triggers
 
-**On tag push** (e.g., `v1.2.0`):
-1. Run the build job above
-2. Build a Docker image tagged with `latest`, the version tag, and the commit SHA
-3. Push all three tags to the Gitea container registry
-4. Deploy by stopping the old container and starting a new one on the `edge` Docker network with Traefik labels for automatic HTTPS routing
+| Trigger | What Runs |
+|---------|-----------|
+| Push to `main` | Build job (typecheck + tests) |
+| Pull request to `main` | Build job (typecheck + tests) |
+| Tag push (`v*`) | Build job + Docker build + Deploy |
 
-Traefik handles TLS termination via Let's Encrypt and routes traffic to the container on port 3001.
+### Pipeline Overview
+
+```
+Push to main / PR
+  │
+  └─ Build Job
+      ├── Checkout code
+      ├── Setup Node.js 22
+      ├── Install dependencies (npm install)
+      ├── TypeScript typecheck (tsc --noEmit)
+      └── Run test suite (vitest run)
+
+Tag push (v*)
+  │
+  ├─ Build Job (same as above)
+  │
+  └─ Docker Job (runs after build passes)
+      ├── Checkout code
+      ├── Login to Gitea container registry
+      ├── Build Docker image (multi-stage)
+      │   └── Tagged as: latest, <version-tag>, <commit-sha>
+      ├── Push all three image tags to registry
+      └── Deploy
+          ├── Stop and remove existing container
+          ├── Pull latest image
+          └── Start new container on edge network with Traefik labels
+```
+
+### Deployment Target
+
+| Component | Service |
+|-----------|---------|
+| Container registry | **Gitea Container Registry** |
+| Reverse proxy | **Traefik** (on Docker `edge` network) |
+| TLS | **Let's Encrypt** via Traefik `certresolver` |
+| Container runtime | **Docker** with `--restart unless-stopped` |
+| Log file mount | Host volume mounted at `/data` |
+
+### Docker Image Tags
+
+Each tag push produces three Docker image tags:
+
+| Tag | Example | Purpose |
+|-----|---------|---------|
+| `latest` | `registry/yenmo/backend:latest` | Always points to the newest release |
+| Version | `registry/yenmo/backend:v1.2.0` | Immutable release tag |
+| SHA | `registry/yenmo/backend:abc1234` | Exact commit traceability |
+
+### Traefik Routing
+
+The container is deployed with Traefik labels for automatic HTTPS routing:
+
+- Routes traffic matching the configured `Host()` rule
+- Uses the `websecure` entrypoint (port 443)
+- TLS certificates provisioned automatically via Let's Encrypt
+- Forwards to the container on port 3001
+
+### Secrets Required
+
+| Secret | Purpose |
+|--------|---------|
+| `REGISTRY_TOKEN` | Authenticates Docker login to Gitea registry |
+| `CORS_ORIGIN` | Allowed CORS origin for the frontend |
+
+### Triggering a Deployment
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
 
 ## Security
 
