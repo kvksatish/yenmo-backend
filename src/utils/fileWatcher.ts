@@ -9,6 +9,7 @@ export function startWatching(
   filePath: string,
   onNewLines: (lines: ParsedLogLine[]) => void,
   onInit: (lines: ParsedLogLine[]) => void,
+  onTruncate?: (lines: ParsedLogLine[]) => void,
 ): void {
   // Read entire file on startup
   try {
@@ -43,8 +44,19 @@ export function startWatching(
 
       if (currentSize < lastOffset) {
         // File was truncated — re-read from the beginning
+        console.log(`[fileWatcher] Truncation detected (${lastOffset} → ${currentSize}), re-reading`);
         lastOffset = 0;
         totalLineCount = 0;
+
+        // Re-read entire file and broadcast as truncate event
+        const content = fs.readFileSync(filePath, 'utf-8');
+        lastOffset = Buffer.byteLength(content, 'utf-8');
+        const parsed = parseLogLines(content, 1);
+        totalLineCount = parsed.length > 0 ? parsed[parsed.length - 1].lineNumber : 0;
+        if (onTruncate) {
+          onTruncate(parsed);
+        }
+        return;
       }
 
       if (currentSize <= lastOffset) return;
