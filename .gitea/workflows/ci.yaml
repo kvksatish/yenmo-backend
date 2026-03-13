@@ -70,7 +70,7 @@ jobs:
             -e LOG_FILE_PATH=/data/sample.log \
             -v /opt/yenmo/logs:/data \
             -l "traefik.enable=true" \
-            -l "traefik.http.routers.yenmo-api.rule=Host(\`api.yenmo.in\`)" \
+            -l "traefik.http.routers.yenmo-api.rule=Host(\`yenmo.spectrity.com\`)" \
             -l "traefik.http.routers.yenmo-api.entrypoints=websecure" \
             -l "traefik.http.routers.yenmo-api.tls.certresolver=letsencrypt" \
             -l "traefik.http.services.yenmo-api.loadbalancer.server.port=3001" \
