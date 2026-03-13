@@ -290,3 +290,133 @@ describe('SSE /events endpoint', () => {
     }
   });
 });
+
+describe('broadcastTruncate', () => {
+  it('sends event: truncate SSE event to connected clients', () => {
+    const router = sseModule.default;
+    const layer = (router as any).stack?.find(
+      (l: any) => l.route?.path === '/events'
+    );
+
+    if (layer) {
+      const handler = layer.route.stack[0].handle;
+
+      const writes: string[] = [];
+      const mockReq = { on: vi.fn() } as any;
+      const mockRes = {
+        setHeader: vi.fn(),
+        flushHeaders: vi.fn(),
+        write: vi.fn((data: string) => writes.push(data)),
+      } as any;
+
+      handler(mockReq, mockRes);
+
+      // Broadcast truncation with fresh lines
+      const freshLines: ParsedLogLine[] = [
+        makeLine({ id: 'fresh-1', lineNumber: 1, raw: 'fresh line 1' }),
+        makeLine({ id: 'fresh-2', lineNumber: 2, raw: 'fresh line 2' }),
+      ];
+      sseModule.broadcastTruncate(freshLines);
+
+      // Find the truncate event among all writes
+      const truncateWrites = writes.filter((w) => w.includes('event: truncate'));
+      expect(truncateWrites).toHaveLength(1);
+
+      // Parse and verify the payload
+      const dataLine = truncateWrites[0].split('\n').find((l: string) => l.startsWith('data: '));
+      const data = JSON.parse(dataLine!.replace('data: ', ''));
+      expect(data.lines).toHaveLength(2);
+      expect(data.lines[0].raw).toBe('fresh line 1');
+      expect(data.lines[1].raw).toBe('fresh line 2');
+    }
+  });
+
+  it('replaces recentLines so new clients get fresh content', () => {
+    // Populate with old lines
+    const oldLines: ParsedLogLine[] = Array.from({ length: 20 }, (_, i) =>
+      makeLine({ id: String(i), lineNumber: i + 1, raw: `old line ${i}` })
+    );
+    sseModule.handleInit(oldLines);
+
+    // Truncate with fresh lines
+    const freshLines: ParsedLogLine[] = [
+      makeLine({ id: 'fresh-1', lineNumber: 1, raw: 'fresh after truncate' }),
+    ];
+    sseModule.broadcastTruncate(freshLines);
+
+    // Now connect a new client and verify it receives the fresh lines, not old ones
+    const router = sseModule.default;
+    const layer = (router as any).stack?.find(
+      (l: any) => l.route?.path === '/events'
+    );
+
+    if (layer) {
+      const handler = layer.route.stack[0].handle;
+      const mockReq = { on: vi.fn() } as any;
+      const mockRes = {
+        setHeader: vi.fn(),
+        flushHeaders: vi.fn(),
+        write: vi.fn(),
+      } as any;
+
+      handler(mockReq, mockRes);
+
+      // The first write is the init event
+      const initCall = mockRes.write.mock.calls[0][0] as string;
+      expect(initCall).toContain('event: init');
+
+      const dataLine = initCall.split('\n').find((l: string) => l.startsWith('data: '));
+      const data = JSON.parse(dataLine!.replace('data: ', ''));
+
+      // Should only contain the fresh line, not the 20 old ones
+      expect(data.lines).toHaveLength(1);
+      expect(data.lines[0].raw).toBe('fresh after truncate');
+    }
+  });
+
+  it('after truncation, new client connecting gets truncated (fresh) lines via init', () => {
+    // Set up initial state with many lines
+    const initialLines: ParsedLogLine[] = Array.from({ length: 50 }, (_, i) =>
+      makeLine({ id: String(i), lineNumber: i + 1, raw: `initial line ${i}` })
+    );
+    sseModule.handleInit(initialLines);
+
+    // Truncate with 3 fresh lines
+    const freshLines: ParsedLogLine[] = [
+      makeLine({ id: 't-1', lineNumber: 1, raw: 'truncated A' }),
+      makeLine({ id: 't-2', lineNumber: 2, raw: 'truncated B' }),
+      makeLine({ id: 't-3', lineNumber: 3, raw: 'truncated C' }),
+    ];
+    sseModule.broadcastTruncate(freshLines);
+
+    // Connect a brand new client
+    const router = sseModule.default;
+    const layer = (router as any).stack?.find(
+      (l: any) => l.route?.path === '/events'
+    );
+
+    if (layer) {
+      const handler = layer.route.stack[0].handle;
+      const mockReq = { on: vi.fn() } as any;
+      const mockRes = {
+        setHeader: vi.fn(),
+        flushHeaders: vi.fn(),
+        write: vi.fn(),
+      } as any;
+
+      handler(mockReq, mockRes);
+
+      const initCall = mockRes.write.mock.calls[0][0] as string;
+      expect(initCall).toContain('event: init');
+
+      const dataLine = initCall.split('\n').find((l: string) => l.startsWith('data: '));
+      const data = JSON.parse(dataLine!.replace('data: ', ''));
+
+      // init sends last 10, but we only have 3, so all 3 should be present
+      expect(data.lines).toHaveLength(3);
+      expect(data.lines[0].raw).toBe('truncated A');
+      expect(data.lines[1].raw).toBe('truncated B');
+      expect(data.lines[2].raw).toBe('truncated C');
+    }
+  });
+});

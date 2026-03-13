@@ -6,7 +6,7 @@ import routes from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { startWatching } from './utils/fileWatcher.js';
-import { handleInit, broadcastLines } from './routes/sse.js';
+import { handleInit, broadcastLines, broadcastTruncate } from './routes/sse.js';
 
 const app = express();
 
@@ -24,6 +24,6 @@ app.use(notFound);
 app.use(errorHandler);
 
 // Start watching the log file and wire up SSE broadcasting
-startWatching(config.logFilePath, broadcastLines, handleInit);
+startWatching(config.logFilePath, broadcastLines, handleInit, broadcastTruncate);
 
 export default app;

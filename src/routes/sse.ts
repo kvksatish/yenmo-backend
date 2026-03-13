@@ -64,4 +64,18 @@ export function broadcastLines(lines: ParsedLogLine[]): void {
   }
 }
 
+/**
+ * Called by the file watcher when the log file is truncated (rotation).
+ * Clears stored lines and tells all clients to reset their display.
+ */
+export function broadcastTruncate(newLines: ParsedLogLine[]): void {
+  recentLines = newLines;
+
+  const truncatePayload = `event: truncate\ndata: ${JSON.stringify({ lines: newLines })}\n\n`;
+  for (const client of clients) {
+    client.write(truncatePayload);
+  }
+  console.log(`[SSE] Broadcast truncate with ${newLines.length} lines`);
+}
+
 export default router;
